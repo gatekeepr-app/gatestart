@@ -41,40 +41,27 @@ export async function POST(req: Request) {
       .insert(submission)
       .select();
 
-    const { data: event } = await supabase
-      .from("Events")
-      .select("*")
-      .eq("eventuuid", eventId)
-      .single();
-
-    // build a lean, serializable event payload
-    const emailEvent = {
-      name: event?.name,
-      coverimg: (event as eventInt)?.image ?? null,
-      date: (event as eventInt)?.date_range.from ?? (event as eventInt)?.date_range?.from ?? null,
-      place:
-        (event as eventInt)?.place ??
-        (event as eventInt)?.place?.title ??
-        (event as eventInt)?.place?.details ??
-        null,
-    };
+    // const { data: event } = await supabase
+    //   .from("Events")
+    //   .select("*")
+    //   .eq("eventuuid", eventId)
+    //   .single();
 
     const payload = {
       email: body?.email,
-      ticketuuid: data?.[0]?.id,
-      event: emailEvent,
+      name: submission.formdata?.name || submission.formdata?.tm1 || "",
     };
 
     // fire-and-forget: do NOT await; add a short timeout so it doesn't hang
     (async () => {
       try {
         await axios.post(
-          "https://gatestart.vercel.app/api/send-ticket",
+          "https://gtstart.vercel.app/api/send-mail",
           payload,
           { timeout: 8000 }
         );
       } catch (e) {
-        console.warn("send-ticket failed (non-blocking):", e);
+        console.warn("send-mail failed (non-blocking):", e);
       }
     })();
 

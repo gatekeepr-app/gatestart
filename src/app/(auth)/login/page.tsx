@@ -17,7 +17,6 @@ export default function LoginPage() {
   const router = useRouter();
   const { user } = useAuthProfile();
 
-  // Redirect if already logged in (client-safe)
   useEffect(() => {
     if (user) router.replace("/");
   }, [user, router]);
