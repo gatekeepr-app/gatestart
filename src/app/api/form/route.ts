@@ -1,12 +1,13 @@
+// app/api/form/route.ts
 import { createClient } from "@/utils/supabase/server";
-import axios from "axios";
 import { NextResponse } from "next/server";
-import { eventInt } from "../../../../types/events";
+
+export const runtime = "nodejs"; // ensure background work isn't killed immediately
 
 export async function POST(req: Request) {
   try {
     // --- Get eventId and userId from URL query ---
-    const { searchParams } = new URL(req.url);
+    const { searchParams, origin } = new URL(req.url);
     const userId = searchParams.get("userId") || "";
     const eventId = searchParams.get("eventId") || "";
 
@@ -33,51 +34,47 @@ export async function POST(req: Request) {
       formdata: body,
     };
 
-    console.log("🗂️ Submitting to Supabase:", submission);
-
     const supabase = await createClient();
-    const { data, error } = await supabase
-      .from("ticki")
-      .insert(submission)
-      .select();
+    const { data, error } = await supabase.from("ticki").insert(submission).select();
 
-    // const { data: event } = await supabase
-    //   .from("Events")
-    //   .select("*")
-    //   .eq("eventuuid", eventId)
-    //   .single();
+    if (error) {
+      console.error("❌ Supabase insert error:", error);
+      return NextResponse.json(
+        { success: false, message: "Supabase insert failed", error: error.message },
+        { status: 500 }
+      );
+    }
 
+    // --- Send email (await with a short timeout) ---
     const payload = {
       email: body?.email,
       name: submission.formdata?.name || submission.formdata?.tm1 || "",
     };
 
-    // fire-and-forget: do NOT await; add a short timeout so it doesn't hang
-    (async () => {
-      try {
-        await axios.post(
-          "https://gtstart.vercel.app/api/send-mail",
-          payload,
-          { timeout: 8000 }
-        );
-      } catch (e) {
-        console.warn("send-mail failed (non-blocking):", e);
+    // Prefer your own deployment's mail route; avoids CORS and cross-app drift
+    const sendMailUrl = `${origin}/api/send-mail`;
+
+    // Small timeout wrapper around fetch (3s)
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 3000);
+
+    try {
+      const res = await fetch(sendMailUrl, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      clearTimeout(t);
+
+      if (!res.ok) {
+        const txt = await res.text().catch(() => "");
+        console.warn("send-mail non-200:", res.status, txt);
       }
-    })();
-
-    if (error) {
-      console.error("❌ Supabase insert error:", error);
-      return NextResponse.json(
-        {
-          success: false,
-          message: "Supabase insert failed",
-          error: error.message,
-        },
-        { status: 500 }
-      );
+    } catch (e) {
+      clearTimeout(t);
+      console.warn("send-mail failed:", e);
     }
-
-    console.log("✅ Inserted successfully:", data);
 
     return NextResponse.json(
       { success: true, message: "Form data saved successfully", data },

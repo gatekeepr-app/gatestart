@@ -103,7 +103,7 @@ export default function EventManage() {
     return () => {
       alive = false;
     };
-  }, [eventId]); // important: prevents repeated fetches every render
+  }); // important: prevents repeated fetches every render
 
   return (
     <div className="p-6 space-y-6">

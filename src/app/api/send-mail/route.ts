@@ -12,16 +12,13 @@ const Body = z.object({
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
-// --- CORS (optional but useful if posting from Framer / other origins) ---
-const ALLOW_ORIGINS = [
-  "https://nsudialogue.gatekeepr.live",
-  "https://gatekeepr.live",
-  "https://*.framer.app",
-];
 function cors(res: NextResponse) {
   res.headers.set("Access-Control-Allow-Origin", "*"); // or pickOrigin(req)
   res.headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
-  res.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  res.headers.set(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization"
+  );
   return res;
 }
 export async function OPTIONS() {
@@ -50,7 +47,7 @@ export async function POST(req: Request) {
     const { data, error } = await resend.emails.send({
       from: "Gatekeepr <team@gatekeepr.live>", // must be a verified sender/domain in Resend
       to: [email],
-      subject: "Pre-registration Confirmation for NSU Dialogue 2025",      
+      subject: "Pre-registration Confirmation for NSU Dialogue 2025",
       headers: { "X-Entity-Ref-ID": idemKey },
       html: `
 <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
@@ -82,12 +79,23 @@ export async function POST(req: Request) {
     }
 
     return cors(NextResponse.json({ ok: true, id: data?.id }));
-  } catch (e: any) {
-    // Catch network/timeouts from your platform → map to clean JSON
-    const msg =
-      e?.code === "ECONNABORTED"
-        ? "Upstream timeout while sending email"
-        : e?.message || "Failed to send email";
+  } catch (e: unknown) {
+    const msg = getErrorMessage(e);
     return cors(NextResponse.json({ error: msg }, { status: 500 }));
   }
+}
+
+// Helper: normalize unknown errors to a safe message
+function getErrorMessage(e: unknown): string {
+  if (typeof e === "object" && e !== null) {
+    const maybe = e as { code?: string; message?: string; name?: string };
+    if (maybe.code === "ECONNABORTED" || maybe.name === "AbortError") {
+      return "Upstream timeout while sending email";
+    }
+    if (typeof maybe.message === "string" && maybe.message.length > 0) {
+      return maybe.message;
+    }
+  }
+  if (typeof e === "string" && e.length > 0) return e;
+  return "Failed to send email";
 }
