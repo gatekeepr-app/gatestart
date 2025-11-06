@@ -1,53 +1,93 @@
 // app/api/send-mail/route.ts
-
 import { NextResponse } from "next/server";
 import { Resend } from "resend";
+import { z } from "zod";
+
+export const runtime = "nodejs"; // avoid Edge time limits for external HTTP
+
+const Body = z.object({
+  email: z.string().email(),
+  name: z.string().min(1).max(120).optional(),
+});
 
 const resend = new Resend(process.env.RESEND_API_KEY);
 
+// --- CORS (optional but useful if posting from Framer / other origins) ---
+const ALLOW_ORIGINS = [
+  "https://nsudialogue.gatekeepr.live",
+  "https://gatekeepr.live",
+  "https://*.framer.app",
+];
+function cors(res: NextResponse) {
+  res.headers.set("Access-Control-Allow-Origin", "*"); // or pickOrigin(req)
+  res.headers.set("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.headers.set("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  return res;
+}
+export async function OPTIONS() {
+  return cors(new NextResponse(null, { status: 204 }));
+}
+
+// --- POST handler ---
 export async function POST(req: Request) {
   try {
-    const { email, name } = await req.json();
-
-    if (!email) {
-      return NextResponse.json({ error: "Email is required" }, { status: 400 });
+    const json = await req.json().catch(() => null);
+    const parsed = Body.safeParse(json);
+    if (!parsed.success) {
+      return cors(
+        NextResponse.json(
+          { error: "Invalid body", issues: parsed.error.flatten() },
+          { status: 400 }
+        )
+      );
     }
 
-    const data = await resend.emails.send({
-      from: "Gatekeepr <team@gatekeepr.live>", // e.g. newsletter@yourdomain.com
-      to: email,
-      subject: "Pre-registration Confirmation for NSU Dialogue 2025",
+    const { email, name } = parsed.data;
+
+    // Optional: generate an idempotency key so duplicate clicks don’t double-send
+    const idemKey = crypto.randomUUID();
+
+    const { data, error } = await resend.emails.send({
+      from: "Gatekeepr <team@gatekeepr.live>", // must be a verified sender/domain in Resend
+      to: [email],
+      subject: "Pre-registration Confirmation for NSU Dialogue 2025",      
+      headers: { "X-Entity-Ref-ID": idemKey },
       html: `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
+<div style="font-family: Arial, sans-serif; max-width: 600px; margin: auto; border: 1px solid #eee; border-radius: 8px; overflow: hidden;">
   <img src="https://95dn3hp0zp.ufs.sh/f/RwfZAb5hM6xzasrVKIvGydWsQDVF3kqAGr4E0wJCIfg1zeim" alt="Event Banner" style="width: 100%; height: auto;" />
-
   <div style="padding: 20px;">
-  <h2 style="font-size: 20px; font-weight: bold; margin-bottom: 10px;">
-Hello ${name},</h2>
-    <h2 style="color: #333;">
-      You're pre-registered for <strong>NSU Dialogue 2025</strong>!
-    </h2>
-
-    <p>Thank you for registering. More details will be shared prior to the event day.</p>
+    <h2 style="font-size: 18px; margin: 0 0 8px 0;">Hello ${name ?? "there"},</h2>
+    <h3 style="margin: 0 0 12px 0;">You're pre-registered for <strong>NSU Dialogue 2025</strong>!</h3>
+    <p style="margin: 0;">Thank you for registering. More details will be shared prior to the event day.</p>
   </div>
-
-  <div style="background-color: #f8f8f8; padding: 16px; text-align: center; font-size: 12px; color: #777;">
-    <p>Stay connected with us:</p>
-    <p>
-      <a href="https://www.instagram.com/gatekeep.dhaka/" style="color: #555;">Instagram</a> |
-      <a href="https://www.facebook.com/GatekeeprOfficial" style="color: #555;">Facebook</a>
+  <div style="background:#f8f8f8; padding:16px; text-align:center; font-size:12px; color:#777;">
+    <p style="margin:0 0 8px 0;">Stay connected with us:</p>
+    <p style="margin:0;">
+      <a href="https://www.instagram.com/gatekeep.dhaka/" style="color:#555;">Instagram</a> |
+      <a href="https://www.facebook.com/GatekeeprOfficial" style="color:#555;">Facebook</a>
     </p>
-    <p>© ${new Date().getFullYear()} Gatekeepr</p>
+    <p style="margin:8px 0 0 0;">© ${new Date().getFullYear()} Gatekeepr</p>
   </div>
 </div>`,
     });
 
-    return NextResponse.json({ success: true, data });
-  } catch (error) {
-    console.error(error);
-    return NextResponse.json(
-      { error: "Failed to send email" },
-      { status: 500 }
-    );
+    if (error) {
+      // Resend returns rich errors; surface useful parts
+      return cors(
+        NextResponse.json(
+          { error: error.message ?? "Resend error", details: error },
+          { status: 502 }
+        )
+      );
+    }
+
+    return cors(NextResponse.json({ ok: true, id: data?.id }));
+  } catch (e: any) {
+    // Catch network/timeouts from your platform → map to clean JSON
+    const msg =
+      e?.code === "ECONNABORTED"
+        ? "Upstream timeout while sending email"
+        : e?.message || "Failed to send email";
+    return cors(NextResponse.json({ error: msg }, { status: 500 }));
   }
 }
